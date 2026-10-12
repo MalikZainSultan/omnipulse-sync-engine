@@ -1,0 +1,117 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// User & Account Management
+model Account {
+  id              String          @id @default(uuid())
+  email           String          @unique
+  organization    String
+  plan            String          @default("PRO") // STARTER, PRO, ENTERPRISE
+  stores          Store[]
+  productMasters  ProductMaster[]
+  createdAt       DateTime        @default(now())
+}
+
+// Connected Marketplaces (Shopify, eBay, WooCommerce)
+model Store {
+  id              String          @id @default(uuid())
+  accountId       String
+  account         Account         @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  platform        PlatformType    // SHOPIFY, EBAY, WOOCOMMERCE
+  storeName       String
+  storeDomain     String
+  isMasterSource  Boolean         @default(false)
+  
+  // Auth & API Credentials (Encrypted)
+  accessToken     String
+  refreshToken    String?
+  apiSecret       String?
+  webhookSecret   String?
+  
+  mappings        ProductPlatformMapping[]
+  syncLogs        SyncLog[]
+  createdAt       DateTime        @default(now())
+
+  @@index([accountId])
+}
+
+enum PlatformType {
+  SHOPIFY
+  EBAY
+  WOOCOMMERCE
+}
+
+// Central Product Registry (Single Source of Truth)
+model ProductMaster {
+  id              String          @id @default(uuid())
+  accountId       String
+  account         Account         @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  globalSku       String          @unique
+  barcode         String?         // UPC / EAN / GTIN
+  title           String
+  description     String?
+  costPrice       Float?
+  sellingPrice    Float
+  masterQuantity  Int             @default(0)
+  
+  // Category & Aspects
+  ebayCategoryId  String?
+  brand           String?
+  aspectsJson     Json?           // Dynamic attributes: Color, Size, MPN, Material
+  
+  platformMappings ProductPlatformMapping[]
+  updatedAt       DateTime        @updatedAt
+  createdAt       DateTime        @default(now())
+
+  @@index([accountId, globalSku])
+}
+
+// Mapping Table between Master SKU and Specific Marketplace IDs
+model ProductPlatformMapping {
+  id              String          @id @default(uuid())
+  productId       String
+  product         ProductMaster   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  storeId         String
+  store           Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  
+  // Platform specific keys
+  platformItemId  String          // Shopify variant_id, WooCommerce variation_id, eBay ItemID/ListingID
+  inventoryItemId String?         // Shopify inventory_item_id
+  syncedStock     Int             @default(0)
+  syncStatus      SyncStatus      @default(SYNCED) // SYNCED, PENDING, ERROR
+  lastErrorReason String?
+  lastSyncedAt    DateTime        @default(now())
+
+  @@unique([storeId, platformItemId])
+  @@index([productId])
+  @@index([storeId])
+}
+
+enum SyncStatus {
+  SYNCED
+  PENDING
+  ERROR
+}
+
+// Real-Time Event & Audit Log Stream
+model SyncLog {
+  id              String          @id @default(uuid())
+  storeId         String
+  store           Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  sku             String
+  eventSource     PlatformType
+  action          String          // STOCK_DECREMENT, PRICE_UPDATE, ASPECT_CORRECTION
+  latencyMs       Int
+  status          String          // SUCCESS, FAILED, ECHO_SKIPPED
+  errorMessage    String?
+  createdAt       DateTime        @default(now())
+
+  @@index([storeId, createdAt])
+  @@index([sku])
+}
